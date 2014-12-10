@@ -4,67 +4,32 @@
 """
 Query tools
 
-Author: Ulrich Feindt (feindt@physik.hu-berlin.de)
+Authors: Ulrich Feindt (feindt@physik.hu-berlin.de, unless noted otherwise)
 """
 
 import numpy as np
 import astropy.units as u
 
 from astropy import coordinates
+from astropy.cosmology import FlatLambdaCDM
+
 from astroquery.ned import Ned
-from scipy.integrate import romberg
+#from scipy.integrate import romberg
 
 # --------------- #
 # -- Constants -- #
 # --------------- #
 
 _c = 299792.458     # speed of light in km s^-1
-_H_0 = 70.            # Hubble constant in km s^-1 Mpc^-1
+_H_0 = 70.          # Hubble constant in km s^-1 Mpc^-1
 _d2r = np.pi/180    # conversion factor from degrees to radians
 _O_M = 0.3          # default matter density
+
+cosmo = FlatLambdaCDM(H0=_H_0, Om0=_O_M)
 
 # --------------------- #
 # -- Basic functions -- #
 # --------------------- #
-
-def d_a(z,O_M=_O_M,O_L=None,w=-1,H_0=_H_0,v_dip=None,v_cart=None,v_mon=0,
-        coords=None,**kwargs):
-    """
-    Angular diameter distance in Mpc
-
-    Arguments:
-    z -- redshift
-
-    Keyword arguments:
-    O_M    -- matter density
-    O_L    -- Dark Energy density (will be set to (1 - O_M) if None)
-    w      -- Dark Energy equation of state parameter (for constant EOS)
-    H_0    -- Hubble constant in km s^-1 Mpc^-1
-    """
-    if O_L is None:
-        Flat = True
-        O_L = 1 - O_M
-        O_K = 0
-    else:
-        Flat = False
-        O_K = 1 - O_M - O_L
-
-    H_rec = lambda x: 1 / np.sqrt(O_M * (1+x)** 3 +
-                                  O_K * (1+x) ** 2 +
-                                  O_L * (1+x)**(3*(1+w)))
-
-    integral=romberg(H_rec,0,z)
-
-    if O_K == 0:
-        result = _c / (1+z) / H_0 * integral
-    elif O_K < 0:
-        result = (_c / (1+z) / H_0 / np.sqrt(-O_K) *
-                  np.sin(np.sqrt(-O_K)*integral))
-    else:
-        result = (_c / (1+z) / H_0 / np.sqrt(O_K) *
-                  np.sinh(np.sqrt(O_K)*integral))
-    
-    return result
 
 def load_from_files(*filenames,**kwargs):
     """
@@ -146,12 +111,153 @@ def load_from_files(*filenames,**kwargs):
 # -- Query functions -- #
 # --------------------- #
 
-def query_coords(RA,Dec,z,diam_transverse=1.,diam_z=0.01,types=['GCluster','Supernova']):
+def query_coords(ra,dec,z,r_transverse=1.,r_z=0.01,types=['GClstr'],min_ref=10):
     """
     
     """
-    co = coordinates.SkyCoord(ra=RA, dec=Dec,unit=(u.deg, u.deg))
-    diam = 1. / d_a(z) / _d2r 
-    result_table = Ned.query_region(co, radius=diam * u.deg)
+    if type(types) == str:
+        types = [types]
+
+    if type(r_transverse) in [float,np.float16,np.float32,np.float32]:
+        r_transverse = r_transverse * u.Mpc
+    elif type(r_transverse) != u.quantity.Quantity:
+        raise TypeError('r_transverse must be float or astropy quantity')
+
+    co = coordinates.SkyCoord(ra=ra,dec=dec,unit=(u.deg,u.deg))
     
-    return result_table
+    r_angular = r_transverse * cosmo.arcsec_per_kpc_proper(z)  
+    result_table = Ned.query_region(co, radius=r_angular.to(u.arcmin))
+    
+    if types is None:
+        return {None: _filter_z_references(result_table,z,r_z,min_ref)}
+    else:
+        out = {}
+        for obj_type in types:
+            result_by_type = result_table[result_table['Type'].data.data == obj_type]
+            if len(result_by_type) > 0:
+                out[obj_type] = _filter_z_references(result_by_type,z,r_z,min_ref)
+            else:
+                out[obj_type] = None
+        return out
+
+def _filter_z_references(result_table,z,r_z=0.01,min_ref=10):
+    """
+
+    """
+    z_filter = ((result_table['Redshift'].data.data >= z - r_z)
+                & (result_table['Redshift'].data.data < z + r_z))
+    ref_filter = result_table['References'].data.data >= min_ref
+    
+    result_cut = result_table[z_filter & ref_filter]
+    
+    ref_sort_idx = np.argsort(result_cut['References'].data.data)[::-1]
+    result_sorted = result_cut[ref_sort_idx]
+
+    # Get CMB-centric redshifts
+    z_cmb = helio2cmb(result_sorted['Redshift'].data.data,
+                      result_sorted['RA(deg)'].data.data,
+                      result_sorted['DEC(deg)'].data.data)
+
+    # prepare output array
+    names = ['Name','z_helio','z_cmb','RA','DEC','References','Type']
+    dtypes = [object,float,float,float,float,int,object]
+    out_data = [result_sorted['Object Name'].data.data,
+                result_sorted['Redshift'].data.data,
+                z_cmb,
+                result_sorted['RA(deg)'].data.data,
+                result_sorted['DEC(deg)'].data.data,
+                result_sorted['References'].data.data,
+                result_sorted['Type'].data.data]
+
+    out = np.zeros((len(result_cut),),dtype=zip(names,dtypes))
+    for name, data in zip(names,out_data):
+        out[name] = data
+
+    return out
+
+def helio2cmb(z, ra, dec):
+    """
+    Convert z_helio to z_cmb for objects at *(ra,dec)* equatorial 
+    coordinates (J2000, in degrees).
+
+    Sources:
+    - http://ned.ipac.caltech.edu/help/velc_help.html
+    """
+    v_apex = 371.0
+    l_apex = 264.14
+    b_apex = 48.26
+
+    l, b = radec2gcs(ra,dec)
+
+    z_cmb = z + v_apex/_c * (np.sin(b*_d2r) * np.sin(b_apex*_d2r) +
+                             np.cos(b*_d2r) * np.cos(b_apex*_d2r) *
+                             np.cos((l-l_apex)*_d2r))
+
+    return z_cmb
+
+# -------------------------------- #
+# ----  FROM THE SNf ToolBox ----- #
+# -------------------------------- #
+
+def radec2gcs(ra, dec, deg=True):
+    """
+    Authors: Yannick Copin (ycopin@ipnl.in2p3.fr)
+    
+    Convert *(ra,dec)* equatorial coordinates (J2000, in degrees if
+    *deg*) to Galactic Coordinate System coordinates *(lII,bII)* (in
+    degrees if *deg*).
+
+    Sources:
+
+    - http://www.dur.ac.uk/physics.astrolab/py_source/conv.py_source
+    - Rotation matrix from
+      http://www.astro.rug.nl/software/kapteyn/celestialbackground.html
+
+    .. Note:: This routine is only roughly accurate, probably at the
+              arcsec level, and therefore not to be used for
+              astrometric purposes. For most accurate conversion, use
+              dedicated `kapteyn.celestial.sky2sky` routine.
+
+    >>> radec2gal(123.456, 12.3456)
+    (210.82842704243518, 23.787110745502183)
+    """
+
+    if deg:
+        ra  =  ra * _d2r
+        dec = dec * _d2r
+
+    rmat = np.array([[-0.054875539396, -0.873437104728, -0.48383499177 ],
+                    [ 0.494109453628, -0.444829594298,  0.7469822487  ],
+                    [-0.867666135683, -0.198076389613,  0.455983794521]])
+    cosd = np.cos(dec)
+    v1 = np.array([np.cos(ra)*cosd,
+                  np.sin(ra)*cosd,
+                  np.sin(dec)])
+    v2 = np.dot(rmat, v1)
+    x,y,z = v2
+
+    c,l = rec2pol(x,y)
+    r,b = rec2pol(c,z)
+
+    assert np.allclose(r,1), "Precision error"
+
+    if deg:
+        l /= _d2r
+        b /= _d2r
+
+    return l, b
+
+def rec2pol(x,y, deg=False):
+    """
+    Authors: Yannick Copin (ycopin@ipnl.in2p3.fr)
+    
+    Conversion of rectangular *(x,y)* to polar *(r,theta)*
+    coordinates
+    """
+
+    r = np.hypot(x,y)
+    t = np.arctan2(y,x)
+    if deg:
+        t /= _d2r
+
+    return r,t
