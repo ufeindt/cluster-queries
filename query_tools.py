@@ -14,7 +14,7 @@ from astropy import coordinates
 from astropy.cosmology import FlatLambdaCDM
 
 from astroquery.ned import Ned
-Ned.TIMEOUT = 600 # Increase time out to 10 minutes
+Ned.TIMEOUT = 300 # Increase time out to 5 minutes
 
 # --------------- #
 # -- Constants -- #
