@@ -14,7 +14,6 @@ from astropy import coordinates
 from astropy.cosmology import FlatLambdaCDM
 
 from astroquery.ned import Ned
-Ned.TIMEOUT = 300 # Increase time out to 5 minutes
 
 # --------------- #
 # -- Constants -- #
@@ -111,10 +110,13 @@ def load_from_files(*filenames,**kwargs):
 # -- Query functions -- #
 # --------------------- #
 
-def query_coords(ra,dec,z,r_transverse=1.,r_z=0.01,types=['GClstr'],min_ref=10):
+def query_coords(ra,dec,z,r_transverse=1.,r_z=0.01,types=['GClstr'],min_ref=10,
+                 timeout=600):
     """
     
     """
+    Ned.TIMEOUT = timeout
+
     if type(types) == str:
         types = [types]
 
