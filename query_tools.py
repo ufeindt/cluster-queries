@@ -14,7 +14,7 @@ from astropy import coordinates
 from astropy.cosmology import FlatLambdaCDM
 
 from astroquery.ned import Ned
-#from scipy.integrate import romberg
+Ned.TIMEOUT = 600 # Increase time out to 10 minutes
 
 # --------------- #
 # -- Constants -- #
@@ -118,7 +118,7 @@ def query_coords(ra,dec,z,r_transverse=1.,r_z=0.01,types=['GClstr'],min_ref=10):
     if type(types) == str:
         types = [types]
 
-    if type(r_transverse) in [float,np.float16,np.float32,np.float32]:
+    if type(r_transverse) in [float,np.float16,np.float32,np.float64]:
         r_transverse = r_transverse * u.Mpc
     elif type(r_transverse) != u.quantity.Quantity:
         raise TypeError('r_transverse must be float or astropy quantity')
@@ -159,8 +159,8 @@ def _filter_z_references(result_table,z,r_z=0.01,min_ref=10):
                       result_sorted['DEC(deg)'].data.data)
 
     # prepare output array
-    names = ['Name','z_helio','z_cmb','RA','DEC','References','Type']
-    dtypes = [object,float,float,float,float,int,object]
+    names = ['Name','z_helio','z_cmb','RA','DEC','Distance (arcmin)','References','Type']
+    dtypes = [object,float,float,float,float,float,int,object]
     out_data = [result_sorted['Object Name'].data.data,
                 result_sorted['Redshift'].data.data,
                 z_cmb,
