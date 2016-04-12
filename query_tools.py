@@ -4,7 +4,7 @@
 """
 Query tools
 
-Authors: Ulrich Feindt (feindt@physik.hu-berlin.de, unless noted otherwise)
+Authors: Ulrich Feindt (ulrich.feindt@fysik.su.se, unless noted otherwise)
 """
 
 import numpy as np
@@ -168,6 +168,7 @@ def _filter_z_references(result_table,z,r_z=0.01,min_ref=10):
                 z_cmb,
                 result_sorted['RA(deg)'].data.data,
                 result_sorted['DEC(deg)'].data.data,
+                result_sorted['Distance (arcmin)'].data.data,
                 result_sorted['References'].data.data,
                 result_sorted['Type'].data.data]
 
